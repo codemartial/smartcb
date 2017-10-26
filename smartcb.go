@@ -24,7 +24,8 @@ const maxFail = 0.4
 const learningCycles = 10    // Size of learning window relative to decision window
 const relearningCycles = 100 // No. of decision cycles after which to re-trigger learning
 
-func New(decisionWindow time.Duration) *circuit.Breaker {
+func New(QPS int) *circuit.Breaker {
+	decisionWindow := time.Millisecond * time.Duration(1000000.0/float64(QPS))
 	if decisionWindow <= 0 {
 		panic("smartcb.NewSmartTripper: decisionWindow should be a valid duration")
 	}
@@ -59,14 +60,13 @@ func New(decisionWindow time.Duration) *circuit.Breaker {
 		if cycles < learningCycles {
 			mu.Lock()
 			// Trip rate starts with maxFail and approaches the learned rate as learning nears completion
-			tripRate := rate*cycles/float64(learningCycles) + maxFail*(float64(learningCycles)-cycles)/float64(learningCycles)
+			tripRate := 5*rate*cycles/float64(learningCycles) + maxFail*(float64(learningCycles)-cycles)/float64(learningCycles)
 			mu.Unlock()
 			return tripRate < recordError(cb)
 		}
-
 		mu.Lock()
 		defer mu.Unlock()
-		return rate < cb.ErrorRate() && cb.Failures()+cb.Successes() > 100
+		return 5*rate < cb.ErrorRate() && cb.Failures()+cb.Successes() > 10
 	}
 
 	options.ShouldTrip = tripper
