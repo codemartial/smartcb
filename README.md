@@ -1,4 +1,7 @@
 # Self-Configuring Smart Circuit Breaker
+
+[![GoDoc](https://godoc.org/github.com/codemartial/smartcb?status.svg)](https://godoc.org/github.com/codemartial/smartcb)
+
 A circuit breaker that continuously adjusts itself according to the error rate profile of the protected task and configures the right tripping threshold as needed.
 
 Package smartcb provides a circuit breaker based on https://github.com/rubyist/circuitbreaker that automatically adjusts the tripping error threshold based on abnormal increase in error rate. All you need to tell it is the nominal QPS ("queries per second") for your task and it automatically sets the best values for adjusting the circuit breaker's responsiveness. If you want, you can adjust the circuit breaker's sensitivity as per your situation.
