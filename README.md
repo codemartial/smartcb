@@ -26,7 +26,7 @@ The error threshold is calculated as an exponential weighted moving average whic
         taskTimeout := time.Second
         
         st := smartcb.NewSmartTripper(taskQPS, smartcb.NewPolicies())
-	    scb := smartcb.NewSmartCircuitBreaker(st)
+	scb := smartcb.NewSmartCircuitBreaker(st)
 	    
         if err := scb.Call(protectedTask, taskTimeout); err != nil {
             if scb.Tripped() {
