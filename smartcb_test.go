@@ -177,7 +177,6 @@ func TestLongRun(t *testing.T) {
 			if e == circuit.BreakerTripped {
 				tripped = true
 			}
-			//t.Log(time.Since(start), e, scb.ErrorRate())
 		default:
 			_ = scb.Call(func() error { <-ticker; return protectedTask(0.2) }, time.Second)
 		}
@@ -203,7 +202,7 @@ func TestStateLabels(t *testing.T) {
 	for k, v := range tests {
 		t.Run(v, func(t *testing.T) {
 			if k.String() != v {
-				t.Error("Invalid Label for Learning State. Expected ", v, ", got ", smartcb.Learning.String())
+				t.Error("Invalid Label for Learning State. Expected ", v, ", got ", k.String())
 			}
 		})
 	}
