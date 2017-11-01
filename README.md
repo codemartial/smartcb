@@ -17,24 +17,24 @@ The error threshold is calculated as an exponential weighted moving average whic
 
 ## Usage
 ```go
-    import (
-        "log"
-	    "time"
+package main
 
-	    "github.com/codemartial/smartcb"
-    )
+import (
+	"log"
+	"time"
 
-    func main() {
-        taskQPS := 1000
-        taskTimeout := time.Second
-        
-        st := smartcb.NewSmartTripper(taskQPS, smartcb.NewPolicies())
+	"github.com/codemartial/smartcb"
+)
+
+func main() {
+	taskQPS := 1000
+	taskTimeout := time.Second
+
+	st := smartcb.NewSmartTripper(taskQPS, smartcb.NewPolicies())
 	scb := smartcb.NewSmartCircuitBreaker(st)
-	    
-        if err := scb.Call(protectedTask, taskTimeout); err != nil {
-            if scb.Tripped() {
-                log.Println("Circuit Breaker tripped at error rate", scb.ErrorRate(), "Normal error rate was ", st.LearnedRate())
-            }
-        }
-    }
+
+	if scb.Call(protectedTask, taskTimeout) != nil && scb.Tripped() {
+		log.Println("Circuit Breaker tripped at error rate", scb.ErrorRate(), "Normal error rate was ", st.LearnedRate())
+	}
+}
 ```

@@ -50,9 +50,6 @@ func Example() {
 	}
 }
 
-var st = smartcb.NewSmartTripper(1000, smartcb.NewPolicies())
-var scb = smartcb.NewSmartCircuitBreaker(st)
-
 func protectedTask(errRate float64) (err error) {
 	if rand.Float64() < errRate {
 		return errors.New("forced error")
@@ -60,56 +57,61 @@ func protectedTask(errRate float64) (err error) {
 	return nil
 }
 
-func TestSmartCBLearning(t *testing.T) {
-	testStop := time.After(time.Millisecond * 1100)
-	bEvents := scb.Subscribe()
-	loop := true
-	for loop {
-		select {
-		case <-testStop:
-			loop = false
-		case e := <-bEvents:
-			if e == circuit.BreakerTripped {
-				t.Error("Circuit Breaker tripped in Learning Phase.", scb.ErrorRate(), st.State(), st.LearnedRate())
+func TestSmartCB(t *testing.T) {
+	st := smartcb.NewSmartTripper(1000, smartcb.NewPolicies())
+	scb := smartcb.NewSmartCircuitBreaker(st)
+
+	t.Run("Learning", func(t *testing.T) {
+		testStop := time.After(time.Millisecond * 1100)
+		bEvents := scb.Subscribe()
+		loop := true
+		for loop {
+			select {
+			case <-testStop:
+				loop = false
+			case e := <-bEvents:
+				if e == circuit.BreakerTripped {
+					t.Error("Circuit Breaker tripped in Learning Phase.", scb.ErrorRate(), st.State(), st.LearnedRate())
+					return
+				}
+			default:
+				_ = scb.Call(func() error { return protectedTask(0.02) }, time.Second)
+			}
+		}
+	})
+
+	t.Run("OperationFail", func(t *testing.T) {
+		scb.ResetCounters()
+		if st.State() != smartcb.Learned {
+			t.Error("Circuit Breaker is still learning")
+		}
+		for i := 0; i < 1000; i++ {
+			err := scb.Call(func() error { return protectedTask(0.2) }, time.Second)
+			if err != nil && scb.Tripped() {
+				break
+			}
+		}
+		if !scb.Tripped() {
+			t.Error("Circuit Breaker did not trip beyond learned failure rate", scb.ErrorRate(), st.LearnedRate())
+		}
+	})
+
+	t.Run("OperationSuccess", func(t *testing.T) {
+		scb.Reset()
+		for {
+			_ = scb.Call(func() error { return protectedTask(0) }, time.Second)
+			if scb.Ready() && scb.Successes() > 50 {
+				break
+			}
+		}
+		for j := 0; j < 100; j++ {
+			err := scb.Call(func() error { return protectedTask(0.018) }, time.Second)
+			if err != nil && scb.Tripped() {
+				t.Error(j, "Circuit breaker tripped unexpectedly", scb.ErrorRate())
 				return
 			}
-		default:
-			_ = scb.Call(func() error { return protectedTask(0.02) }, time.Second)
 		}
-	}
-}
-
-func TestSmartCBOperationFail(t *testing.T) {
-	scb.ResetCounters()
-	if st.State() != smartcb.Learned {
-		t.Error("Circuit Breaker is still learning")
-	}
-	for i := 0; i < 1000; i++ {
-		err := scb.Call(func() error { return protectedTask(0.2) }, time.Second)
-		if err != nil && scb.Tripped() {
-			break
-		}
-	}
-	if !scb.Tripped() {
-		t.Error("Circuit Breaker did not trip beyond learned failure rate", scb.ErrorRate(), st.LearnedRate())
-	}
-}
-
-func TestCBOperationSuccess(t *testing.T) {
-	scb.Reset()
-	for {
-		_ = scb.Call(func() error { return protectedTask(0) }, time.Second)
-		if scb.Ready() && scb.Successes() > 50 {
-			break
-		}
-	}
-	for j := 0; j < 100; j++ {
-		err := scb.Call(func() error { return protectedTask(0.018) }, time.Second)
-		if err != nil && scb.Tripped() {
-			t.Error(j, "Circuit breaker tripped unexpectedly", scb.ErrorRate())
-			return
-		}
-	}
+	})
 }
 
 func TestInvalidDuration(t *testing.T) {
@@ -123,7 +125,7 @@ func TestInvalidDuration(t *testing.T) {
 }
 
 func TestLearnGuard(t *testing.T) {
-	scb = smartcb.NewSmartCircuitBreaker(smartcb.NewSmartTripper(1000, smartcb.NewPolicies()))
+	scb := smartcb.NewSmartCircuitBreaker(smartcb.NewSmartTripper(1000, smartcb.NewPolicies()))
 	loop := true
 	testStop := time.After(time.Millisecond * 1100)
 	var tripped bool
@@ -146,8 +148,8 @@ func TestLongRun(t *testing.T) {
 	if testing.Short() {
 		return
 	}
-	st = smartcb.NewSmartTripper(1000, smartcb.NewPolicies())
-	scb = smartcb.NewSmartCircuitBreaker(st)
+	st := smartcb.NewSmartTripper(1000, smartcb.NewPolicies())
+	scb := smartcb.NewSmartCircuitBreaker(st)
 	ticker := time.Tick(time.Millisecond)
 	testStop := time.After(time.Second * 2)
 	loop := true
@@ -205,5 +207,26 @@ func TestStateLabels(t *testing.T) {
 				t.Error("Invalid Label for Learning State. Expected ", v, ", got ", k.String())
 			}
 		})
+	}
+}
+
+func TestZeroErrorLearning(t *testing.T) {
+	st := smartcb.NewSmartTripper(10000, smartcb.NewPolicies())
+	scb := smartcb.NewSmartCircuitBreaker(st)
+	loop := true
+	testStop := time.After(time.Millisecond * 110)
+	for loop {
+		select {
+		case <-testStop:
+			loop = false
+		default:
+			if scb.Call(func() error { return protectedTask(0) }, time.Second) != nil {
+				t.Error("Circuit breaker tripped in Learning Phase.", scb.ErrorRate(), st.State(), st.LearnedRate())
+			}
+		}
+	}
+	minFail := 0.001
+	if st.LearnedRate() < minFail {
+		t.Error("Circuit breaker learned abnormally low error rate", st.LearnedRate(), "Expected rate was >=", minFail)
 	}
 }

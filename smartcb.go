@@ -7,12 +7,15 @@ import (
 	"github.com/rubyist/circuitbreaker"
 )
 
-// Policies for configuring the circuit breaker's decision making
-// If you must, experiment with the parameters one at a time. All parameters
-// are required to be > 0
+// Policies for configuring the circuit breaker's decision making.
+//
+// FailMultiplier and MaxFail are the only parameters that might need
+// tweaking. If you must, experiment with changing one parameter at a time.
+// All parameters are required to be > 0
+//
 type Policies struct {
-	// Circuit breaker trips when the error rate hits FailMultiplier times of the learned rate
-	// You could adjust this based on your error rate profile
+	// Circuit breaker trips when the error rate reaches
+	// FailMultiplier times of the learned rate. Default is 3.0
 	FailMultiplier float64
 	// Absolute highest failure rate above which the breaker must open
 	// Default is 0.4 (40%). You should definitely review this number
@@ -25,9 +28,10 @@ type Policies struct {
 	// This setting must be greater than LearningWindowX otherwise the breaker
 	// would be in a perpetual learning state
 	ReLearningWindowX float64
-	// Smoothing factor for error rate learning. Higher numbers reduce jitter but cause more lag
+	// Smoothing factor for error rate learning. Higher numbers reduce jitter
+	// but cause more lag
 	EWMADecayFactor float64
-	// Minimum number of error/success incidents required for minimum decision making
+	// Minimum number of error/success incidents required for decision making
 	SamplesPerWindow int64
 }
 
@@ -48,15 +52,25 @@ func min(l, r float64) float64 {
 	return r
 }
 
+func max(l, r float64) float64 {
+	if l > r {
+		return l
+	}
+	return r
+}
+
 // Circuit Breaker's Learning State
 type State int
 
 const (
-	// Circuit Breaker is Learning
+	// Circuit Breaker is learning
 	Learning State = iota
+
 	// Circuit Breaker has learned
 	Learned
 )
+
+const minFail = 0.001
 
 func (s State) String() string {
 	switch s {
@@ -74,6 +88,7 @@ func (s State) String() string {
 // All circuit breakers obtained out of a generator
 // share their learning state, but the circuit breaker state
 // (error rates, event counts, etc.) is not shared
+//
 type SmartTripper struct {
 	decisionWindow time.Duration
 	policies       Policies
@@ -83,6 +98,7 @@ type SmartTripper struct {
 }
 
 // Returns Policies initialised to default values
+//
 func NewPolicies() Policies {
 	return defaults
 }
@@ -94,22 +110,25 @@ func NewPolicies() Policies {
 // your median QPS. If your QPS varies a lot during operation, choosing this
 // value closer to max QPS will make the circuit breaker more prone to tripping
 // during low traffic periods and choosing a value closer to min QPS will make it
-// a slow to respond during high traffic periods.
+// slow to respond during high traffic periods.
+//
 func NewSmartTripper(QPS int, p Policies) *SmartTripper {
 	if QPS <= 0 {
 		panic("smartcb.NewSmartTripper: QPS should be >= 1")
 	}
 	decisionWindow := time.Millisecond * time.Duration(float64(p.SamplesPerWindow)*1000.0/float64(QPS))
 
-	return &SmartTripper{decisionWindow: decisionWindow, policies: p}
+	return &SmartTripper{decisionWindow: decisionWindow, policies: p, rate: minFail}
 }
 
 // Returns the Learning/Learned state of the Smart Tripper
+//
 func (t *SmartTripper) State() State {
 	return t.state
 }
 
 // Returns the error rate that has been learned by the Smart Tripper
+//
 func (t *SmartTripper) LearnedRate() float64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -129,7 +148,7 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 		defer t.mu.Unlock()
 
 		cbr := cb.ErrorRate()
-		t.rate = (t.policies.EWMADecayFactor*t.rate + cbr) / (t.policies.EWMADecayFactor + 1)
+		t.rate = max((t.policies.EWMADecayFactor*t.rate+cbr)/(t.policies.EWMADecayFactor+1), minFail)
 
 		return t.rate, cbr
 	}
@@ -166,6 +185,7 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 }
 
 // Create a new circuit.Breaker using the dynamically self-configuring SmartTripper
+//
 func NewSmartCircuitBreaker(t *SmartTripper) *circuit.Breaker {
 	options := &circuit.Options{
 		WindowTime: t.decisionWindow,
