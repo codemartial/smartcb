@@ -4,12 +4,15 @@ import (
 	"errors"
 	"log"
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/codemartial/smartcb"
 	"github.com/rubyist/circuitbreaker"
 )
+
+const minFail = 0.001 // Must match smartcb.minFail (which is unexported)
 
 func Example() {
 	// Initialise policies and set max. tolerable failure rate
@@ -124,6 +127,7 @@ func TestInvalidDuration(t *testing.T) {
 	_ = smartcb.NewSmartTripper(0, smartcb.NewPolicies())
 }
 
+// Test that the breaker doesn't learn a high failure rate
 func TestLearnGuard(t *testing.T) {
 	scb := smartcb.NewSmartCircuitBreaker(smartcb.NewSmartTripper(1000, smartcb.NewPolicies()))
 	loop := true
@@ -134,7 +138,7 @@ func TestLearnGuard(t *testing.T) {
 		case <-testStop:
 			loop = false
 		default:
-			if scb.Call(func() error { return protectedTask(0.41) }, time.Second) != nil {
+			if scb.Call(func() error { return protectedTask(smartcb.NewPolicies().MaxFail * 1.1) }, time.Second) != nil {
 				tripped = scb.Tripped()
 			}
 		}
@@ -144,16 +148,29 @@ func TestLearnGuard(t *testing.T) {
 	}
 }
 
-func TestLongRun(t *testing.T) {
+func TestConcurrency(t *testing.T) {
 	if testing.Short() {
 		return
 	}
+
 	st := smartcb.NewSmartTripper(1000, smartcb.NewPolicies())
 	scb := smartcb.NewSmartCircuitBreaker(st)
-	ticker := time.Tick(time.Millisecond)
 	testStop := time.After(time.Second * 2)
 	loop := true
 	bEvents := scb.Subscribe()
+
+	concurrentCall := func(errRate float64) {
+		var wg sync.WaitGroup
+		wg.Add(32) //MAGIC
+		for i := 0; i < 32; i++ {
+			go func() {
+				_ = scb.Call(func() error { return protectedTask(errRate) }, time.Second)
+				wg.Done()
+			}()
+		}
+		wg.Wait()
+	}
+
 	for loop {
 		select {
 		case <-testStop:
@@ -164,7 +181,7 @@ func TestLongRun(t *testing.T) {
 				t.Error("Circuit Breaker tripped in Learning Phase.", scb.ErrorRate(), st.State(), st.LearnedRate())
 			}
 		default:
-			_ = scb.Call(func() error { <-ticker; return protectedTask(0.02) }, time.Second)
+			concurrentCall(0.02)
 		}
 	}
 
@@ -180,7 +197,7 @@ func TestLongRun(t *testing.T) {
 				tripped = true
 			}
 		default:
-			_ = scb.Call(func() error { <-ticker; return protectedTask(0.2) }, time.Second)
+			concurrentCall(0.2)
 		}
 	}
 	if !tripped {
@@ -194,7 +211,7 @@ func TestLongRun(t *testing.T) {
 		case <-testStop:
 			loop = false
 		default:
-			_ = scb.Call(func() error { <-ticker; return protectedTask(0.02) }, time.Second)
+			concurrentCall(0.02)
 		}
 	}
 }
@@ -213,6 +230,7 @@ func TestStateLabels(t *testing.T) {
 func TestZeroErrorLearning(t *testing.T) {
 	st := smartcb.NewSmartTripper(10000, smartcb.NewPolicies())
 	scb := smartcb.NewSmartCircuitBreaker(st)
+
 	loop := true
 	testStop := time.After(time.Millisecond * 110)
 	for loop {
@@ -220,13 +238,38 @@ func TestZeroErrorLearning(t *testing.T) {
 		case <-testStop:
 			loop = false
 		default:
-			if scb.Call(func() error { return protectedTask(0) }, time.Second) != nil {
+			if scb.Call(func() error { return protectedTask(minFail / 2.0) }, time.Second) != nil && scb.Tripped() {
 				t.Error("Circuit breaker tripped in Learning Phase.", scb.ErrorRate(), st.State(), st.LearnedRate())
 			}
 		}
 	}
-	minFail := 0.001
+
 	if st.LearnedRate() < minFail {
 		t.Error("Circuit breaker learned abnormally low error rate", st.LearnedRate(), "Expected rate was >=", minFail)
 	}
+}
+
+func TestInitState(t *testing.T) {
+	st := smartcb.NewSmartTripper(1000, smartcb.NewPolicies())
+	if st.State() == smartcb.Learning {
+		t.Error("Circuit breaker initialised in Learning state")
+	}
+}
+
+func BenchmarkCB(b *testing.B) {
+	st := smartcb.NewSmartTripper(100000, smartcb.NewPolicies())
+	scb := smartcb.NewSmartCircuitBreaker(st)
+	bEvents := scb.Subscribe()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			scb.Call(func() error { return protectedTask(0.0) }, time.Second)
+			select {
+			case e := <-bEvents:
+				if e == circuit.BreakerTripped || e == circuit.BreakerFail {
+					b.Error("Circuit breaker failed")
+				}
+			default:
+			}
+		}
+	})
 }

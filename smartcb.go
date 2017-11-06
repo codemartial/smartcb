@@ -63,11 +63,11 @@ func max(l, r float64) float64 {
 type State int
 
 const (
-	// Circuit Breaker is learning
-	Learning State = iota
-
 	// Circuit Breaker has learned
-	Learned
+	Learned State = iota
+
+	// Circuit Breaker is learning
+	Learning
 )
 
 const minFail = 0.001
@@ -94,6 +94,7 @@ type SmartTripper struct {
 	policies       Policies
 	state          State
 	rate           float64
+	initTime       time.Time
 	mu             sync.Mutex
 }
 
@@ -106,11 +107,14 @@ func NewPolicies() Policies {
 // Create a SmartTripper based on the nominal QPS for your task
 //
 // "Nominal QPS" is the basis on which the SmartTripper configures its
-// decision-making parameters. A suitable value for this parameter would be
+// responsiveness settings. A suitable value for this parameter would be
 // your median QPS. If your QPS varies a lot during operation, choosing this
 // value closer to max QPS will make the circuit breaker more prone to tripping
 // during low traffic periods and choosing a value closer to min QPS will make it
 // slow to respond during high traffic periods.
+//
+// NOTE: Provide QPS value applicable for one instance of the circuit breaker,
+// not the overall QPS across multiple instances.
 //
 func NewSmartTripper(QPS int, p Policies) *SmartTripper {
 	if QPS <= 0 {
@@ -124,6 +128,9 @@ func NewSmartTripper(QPS int, p Policies) *SmartTripper {
 // Returns the Learning/Learned state of the Smart Tripper
 //
 func (t *SmartTripper) State() State {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	return t.state
 }
 
@@ -137,16 +144,16 @@ func (t *SmartTripper) LearnedRate() float64 {
 }
 
 func (t *SmartTripper) tripFunc() circuit.TripFunc {
-	var initTime time.Time
-
 	learningCycles := t.policies.LearningWindowX
 	relearningCycles := t.policies.ReLearningWindowX
 	maxFail := t.policies.MaxFail
 
-	recordError := func(cb *circuit.Breaker) (float64, float64) {
-		t.mu.Lock()
-		defer t.mu.Unlock()
+	initLearning := func(cb *circuit.Breaker) {
+		t.initTime = time.Now()
+		t.state = Learning
+	}
 
+	recordError := func(cb *circuit.Breaker) (float64, float64) {
 		cbr := cb.ErrorRate()
 		t.rate = max((t.policies.EWMADecayFactor*t.rate+cbr)/(t.policies.EWMADecayFactor+1), minFail)
 
@@ -154,18 +161,24 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 	}
 
 	tripper := func(cb *circuit.Breaker) bool {
-		tElapsed := time.Since(initTime)
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		tElapsed := time.Since(t.initTime)
 
 		// Initiate Learning Phase
-		if initTime == (time.Time{}) || tElapsed > t.decisionWindow*time.Duration(relearningCycles) {
-			initTime = time.Now()
-			tElapsed = time.Since(initTime)
-			t.state = Learning
+		if t.initTime == (time.Time{}) || tElapsed > t.decisionWindow*time.Duration(relearningCycles) {
+			initLearning(cb)
+			tElapsed = time.Since(t.initTime)
 		}
 
-		// Learning
 		cycles := float64(tElapsed) / float64(t.decisionWindow)
-		if cycles < learningCycles {
+
+		// Terminate Learning Phase
+		if t.state == Learning && cycles > learningCycles {
+			t.state = Learned
+		}
+
+		if t.state == Learning {
 			lRate, eRate := recordError(cb)
 
 			// Trip t.rate starts with t.policies.MaxFail and approaches the Learned Rate * FailMultiplier as learning nears completion
@@ -177,8 +190,7 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 			return tripRate < eRate && cb.Failures()+cb.Successes() > t.policies.SamplesPerWindow
 		}
 
-		t.state = Learned
-		return min(t.policies.FailMultiplier*t.LearnedRate(), maxFail) < cb.ErrorRate() && cb.Failures()+cb.Successes() > t.policies.SamplesPerWindow
+		return min(t.policies.FailMultiplier*t.rate, maxFail) < cb.ErrorRate() && cb.Failures()+cb.Successes() > t.policies.SamplesPerWindow
 	}
 
 	return tripper
@@ -186,6 +198,8 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 
 // Create a new circuit.Breaker using the dynamically self-configuring SmartTripper
 //
+// It returns a circuit.Breaker from github.com/rubyist/circuitbreaker
+// Please see its documentation to understand how to use the breaker
 func NewSmartCircuitBreaker(t *SmartTripper) *circuit.Breaker {
 	options := &circuit.Options{
 		WindowTime: t.decisionWindow,
