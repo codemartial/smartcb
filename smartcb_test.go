@@ -161,6 +161,17 @@ func TestLearnGuard(t *testing.T) {
 	}
 }
 
+func TestLowLiquidity(t *testing.T) {
+	scb := smartcb.NewSmartCircuitBreaker(smartcb.NewSmartTripper(1000, smartcb.NewPolicies()))
+	for i := 0; i < 10; i++ {
+		scb.Call(func() error { return protectedTask(0.40) }, time.Second)
+
+		if scb.Tripped() {
+			t.Error("Circuit Breaker tripped unreasonably ", scb.ErrorRate(), i)
+		}
+	}
+}
+
 func TestConcurrency(t *testing.T) {
 	if testing.Short() {
 		return

@@ -154,12 +154,14 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 	shouldPerhapsTrip := func(target, actual float64, sampleSize int64) bool {
 		ss := float64(sampleSize)
 		ssig := float64(t.policies.SamplesPerWindow)
-
+		if ss < 10 { // Can't guess much from just 10 samples
+			return false
+		}
 		if ss > ssig {
 			ss = ssig
 		}
 		pf := (ssig - ss) / (ssig - 1)
-		fearFactor := math.Sqrt(pf*actual*(1-actual)/ss) * 2.58
+		fearFactor := math.Sqrt(pf*actual*(1-actual)/ss) * 2.58 // 2.58 = z-Critical at 99% confidence
 
 		return actual-fearFactor > target
 	}
