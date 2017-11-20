@@ -1,6 +1,7 @@
 package smartcb
 
 import (
+	"math"
 	"sync"
 	"time"
 
@@ -9,14 +10,12 @@ import (
 
 // Policies for configuring the circuit breaker's decision making.
 //
-// FailMultiplier and MaxFail are the only parameters that might need
-// tweaking. If you must, experiment with changing one parameter at a time.
+// MaxFail is the only parameter that might need adjustment.
+// Do not tweak the other parameters unless you are a statistician.
+// If you must, experiment with changing one parameter at a time.
 // All parameters are required to be > 0
 //
 type Policies struct {
-	// Circuit breaker trips when the error rate reaches
-	// FailMultiplier times of the learned rate. Default is 3.0
-	FailMultiplier float64
 	// Absolute highest failure rate above which the breaker must open
 	// Default is 0.4 (40%). You should definitely review this number
 	MaxFail float64
@@ -31,7 +30,7 @@ type Policies struct {
 	// Smoothing factor for error rate learning. Higher numbers reduce jitter
 	// but cause more lag
 	EWMADecayFactor float64
-	// Minimum number of error/success incidents required for decision making
+	// Number of trials in a decision window.
 	SamplesPerWindow int64
 }
 
@@ -40,16 +39,7 @@ var defaults = Policies{
 	LearningWindowX:   10.0,
 	ReLearningWindowX: 100.0,
 	EWMADecayFactor:   10.0,
-
-	FailMultiplier:   3.0,
-	SamplesPerWindow: 100,
-}
-
-func min(l, r float64) float64 {
-	if l < r {
-		return l
-	}
-	return r
+	SamplesPerWindow:  100,
 }
 
 func max(l, r float64) float64 {
@@ -153,11 +143,25 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 		t.state = Learning
 	}
 
-	recordError := func(cb *circuit.Breaker) (float64, float64) {
+	recordError := func(cb *circuit.Breaker) float64 {
 		cbr := cb.ErrorRate()
 		t.rate = max((t.policies.EWMADecayFactor*t.rate+cbr)/(t.policies.EWMADecayFactor+1), minFail)
 
-		return t.rate, cbr
+		return cbr
+	}
+
+	// Use Adjusted Wald Method to estimate whether we are confident enough to trip based on the no. of samples
+	shouldPerhapsTrip := func(target, actual float64, sampleSize int64) bool {
+		ss := float64(sampleSize)
+		ssig := float64(t.policies.SamplesPerWindow)
+
+		if ss > ssig {
+			ss = ssig
+		}
+		pf := (ssig - ss) / (ssig - 1)
+		fearFactor := math.Sqrt(pf*actual*(1-actual)/ss) * 2.58
+
+		return actual-fearFactor > target
 	}
 
 	tripper := func(cb *circuit.Breaker) bool {
@@ -179,18 +183,17 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 		}
 
 		if t.state == Learning {
-			lRate, eRate := recordError(cb)
-
+			errorRate := recordError(cb)
+			failMultiplier := math.Log2(maxFail / t.rate)
 			// Trip t.rate starts with t.policies.MaxFail and approaches the Learned Rate * FailMultiplier as learning nears completion
-			lRateMultiplier := t.policies.FailMultiplier * cycles / learningCycles
+			learnedRateMultiplier := failMultiplier * cycles / learningCycles
 			maxFailMultiplier := (learningCycles - cycles) / learningCycles
-			tripRate := lRate*lRateMultiplier + maxFail*maxFailMultiplier
-			tripRate = min(tripRate, maxFail)
+			tripRate := t.rate*learnedRateMultiplier + maxFail*maxFailMultiplier
 
-			return tripRate < eRate && cb.Failures()+cb.Successes() > t.policies.SamplesPerWindow
+			return shouldPerhapsTrip(tripRate, errorRate, cb.Failures()+cb.Successes())
 		}
 
-		return min(t.policies.FailMultiplier*t.rate, maxFail) < cb.ErrorRate() && cb.Failures()+cb.Successes() > t.policies.SamplesPerWindow
+		return shouldPerhapsTrip(math.Log2(maxFail/t.rate)*t.rate, cb.ErrorRate(), cb.Failures()+cb.Successes())
 	}
 
 	return tripper

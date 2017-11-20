@@ -65,6 +65,7 @@ func TestSmartCB(t *testing.T) {
 	scb := smartcb.NewSmartCircuitBreaker(st)
 
 	t.Run("Learning", func(t *testing.T) {
+		scb.Reset()
 		testStop := time.After(time.Millisecond * 1100)
 		bEvents := scb.Subscribe()
 		loop := true
@@ -113,6 +114,18 @@ func TestSmartCB(t *testing.T) {
 				t.Error(j, "Circuit breaker tripped unexpectedly", scb.ErrorRate())
 				return
 			}
+		}
+	})
+
+	t.Run("MaxFail", func(t *testing.T) {
+		for i := 0; i < 1000; i++ {
+			err := scb.Call(func() error { return protectedTask(smartcb.NewPolicies().MaxFail) }, time.Second)
+			if err != nil && scb.Tripped() {
+				break
+			}
+		}
+		if !scb.Tripped() {
+			t.Error("Circuit Breaker did not trip at max failure rate", scb.ErrorRate(), st.LearnedRate())
 		}
 	})
 }
@@ -238,7 +251,7 @@ func TestZeroErrorLearning(t *testing.T) {
 		case <-testStop:
 			loop = false
 		default:
-			if scb.Call(func() error { return protectedTask(minFail / 2.0) }, time.Second) != nil && scb.Tripped() {
+			if scb.Call(func() error { return protectedTask(minFail / 5.0) }, time.Second) != nil && scb.Tripped() {
 				t.Error("Circuit breaker tripped in Learning Phase.", scb.ErrorRate(), st.State(), st.LearnedRate())
 			}
 		}
