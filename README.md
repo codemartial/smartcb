@@ -38,3 +38,9 @@ func main() {
 	}
 }
 ```
+
+## Testing and Simulation
+Run `go test` as usual to execute the unit tests. The package also includes a couple of simulations for slowly increasing error rates and fluctuating error rates that compare the state of SmartCB against Rate based circuit breaker from github.com/rubyist/circuitbreaker. To run these simulations use the following command:
+```sh
+    go test -tags sims
+```
