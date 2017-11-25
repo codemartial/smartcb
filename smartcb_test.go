@@ -21,7 +21,7 @@ func Example() {
 	policies.MaxFail = 0.15
 
 	// Create a SmartTripper Generator for a 10k QPS task
-	var st = smartcb.NewSmartTripper(10000, policies)
+	var st = smartcb.NewSmartTripper(100000, policies)
 	// Create a Circuit Breaker from the SmartTripper Generator
 	var scb = smartcb.NewSmartCircuitBreaker(st)
 
@@ -61,7 +61,7 @@ func protectedTask(errRate float64) (err error) {
 }
 
 func TestSmartCB(t *testing.T) {
-	st := smartcb.NewSmartTripper(1000, smartcb.NewPolicies())
+	st := smartcb.NewSmartTripper(10000, smartcb.NewPolicies())
 	scb := smartcb.NewSmartCircuitBreaker(st)
 
 	t.Run("Learning", func(t *testing.T) {
@@ -142,7 +142,8 @@ func TestInvalidDuration(t *testing.T) {
 
 // Test that the breaker doesn't learn a high failure rate
 func TestLearnGuard(t *testing.T) {
-	scb := smartcb.NewSmartCircuitBreaker(smartcb.NewSmartTripper(1000, smartcb.NewPolicies()))
+	st := smartcb.NewSmartTripper(10000, smartcb.NewPolicies())
+	scb := smartcb.NewSmartCircuitBreaker(st)
 	loop := true
 	testStop := time.After(time.Millisecond * 1100)
 	var tripped bool
@@ -157,13 +158,13 @@ func TestLearnGuard(t *testing.T) {
 		}
 	}
 	if !tripped {
-		t.Error("Circuit Breaker learned a dangerous failure rate ", scb.ErrorRate())
+		t.Error("Circuit Breaker learned a dangerous failure rate ", st.LearnedRate())
 	}
 }
 
 func TestLowLiquidity(t *testing.T) {
-	scb := smartcb.NewSmartCircuitBreaker(smartcb.NewSmartTripper(1000, smartcb.NewPolicies()))
-	for i := 0; i < 10; i++ {
+	scb := smartcb.NewSmartCircuitBreaker(smartcb.NewSmartTripper(10000, smartcb.NewPolicies()))
+	for i := 0; i < 100; i++ {
 		scb.Call(func() error { return protectedTask(0.40) }, time.Second)
 
 		if scb.Tripped() {
@@ -177,7 +178,7 @@ func TestConcurrency(t *testing.T) {
 		return
 	}
 
-	st := smartcb.NewSmartTripper(1000, smartcb.NewPolicies())
+	st := smartcb.NewSmartTripper(10000, smartcb.NewPolicies())
 	scb := smartcb.NewSmartCircuitBreaker(st)
 	testStop := time.After(time.Second * 2)
 	loop := true
@@ -252,7 +253,7 @@ func TestStateLabels(t *testing.T) {
 }
 
 func TestZeroErrorLearning(t *testing.T) {
-	st := smartcb.NewSmartTripper(10000, smartcb.NewPolicies())
+	st := smartcb.NewSmartTripper(100000, smartcb.NewPolicies())
 	scb := smartcb.NewSmartCircuitBreaker(st)
 
 	loop := true

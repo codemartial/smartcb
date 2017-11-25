@@ -1,4 +1,0 @@
-package: github.com/codemartial/smartcb
-import:
-- package: github.com/rubyist/circuitbreaker
-  version: ^2.2.0

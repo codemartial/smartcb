@@ -39,7 +39,7 @@ var defaults = Policies{
 	LearningWindowX:   10.0,
 	ReLearningWindowX: 100.0,
 	EWMADecayFactor:   10.0,
-	SamplesPerWindow:  100,
+	SamplesPerWindow:  1000,
 }
 
 func max(l, r float64) float64 {
@@ -146,17 +146,20 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 	recordError := func(cb *circuit.Breaker) float64 {
 		cbr := cb.ErrorRate()
 		t.rate = max((t.policies.EWMADecayFactor*t.rate+cbr)/(t.policies.EWMADecayFactor+1), minFail)
+		if t.rate > maxFail {
+			t.rate = maxFail
+		}
 
 		return cbr
 	}
 
 	// Use Adjusted Wald Method to estimate whether we are confident enough to trip based on the no. of samples
 	shouldPerhapsTrip := func(target, actual float64, sampleSize int64) bool {
-		ss := float64(sampleSize)
-		ssig := float64(t.policies.SamplesPerWindow)
-		if ss < 10 { // Can't guess much from just 10 samples
+		if sampleSize < t.policies.SamplesPerWindow/10 { // Can't guess much from just 10% samples
 			return false
 		}
+		ss := float64(sampleSize)
+		ssig := float64(t.policies.SamplesPerWindow)
 		if ss > ssig {
 			ss = ssig
 		}
@@ -186,7 +189,7 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 
 		if t.state == Learning {
 			errorRate := recordError(cb)
-			failMultiplier := math.Log2(maxFail / t.rate)
+			failMultiplier := math.Log2(maxFail/t.rate) + 1
 			// Trip t.rate starts with t.policies.MaxFail and approaches the Learned Rate * FailMultiplier as learning nears completion
 			learnedRateMultiplier := failMultiplier * cycles / learningCycles
 			maxFailMultiplier := (learningCycles - cycles) / learningCycles
@@ -195,7 +198,9 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 			return shouldPerhapsTrip(tripRate, errorRate, cb.Failures()+cb.Successes())
 		}
 
-		return shouldPerhapsTrip(math.Log2(maxFail/t.rate)*t.rate, cb.ErrorRate(), cb.Failures()+cb.Successes())
+		return shouldPerhapsTrip((1+math.Log2(maxFail/t.rate))*t.rate,
+			cb.ErrorRate(),
+			cb.Failures()+cb.Successes())
 	}
 
 	return tripper
