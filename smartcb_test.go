@@ -142,10 +142,10 @@ func TestInvalidDuration(t *testing.T) {
 
 // Test that the breaker doesn't learn a high failure rate
 func TestLearnGuard(t *testing.T) {
-	st := smartcb.NewSmartTripper(10000, smartcb.NewPolicies())
+	st := smartcb.NewSmartTripper(100000, smartcb.NewPolicies())
 	scb := smartcb.NewSmartCircuitBreaker(st)
 	loop := true
-	testStop := time.After(time.Millisecond * 1100)
+	testStop := time.After(time.Millisecond * 110)
 	var tripped bool
 	for loop {
 		select {
@@ -163,12 +163,13 @@ func TestLearnGuard(t *testing.T) {
 }
 
 func TestLowLiquidity(t *testing.T) {
-	scb := smartcb.NewSmartCircuitBreaker(smartcb.NewSmartTripper(10000, smartcb.NewPolicies()))
-	for i := 0; i < 100; i++ {
-		scb.Call(func() error { return protectedTask(0.40) }, time.Second)
+	p := smartcb.NewPolicies()
+	scb := smartcb.NewSmartCircuitBreaker(smartcb.NewSmartTripper(10000, p))
+	for i := 1; i < int(p.SamplesPerWindow/10); i++ {
+		scb.Call(func() error { return protectedTask(1.0) }, time.Second)
 
 		if scb.Tripped() {
-			t.Error("Circuit Breaker tripped unreasonably ", scb.ErrorRate(), i)
+			t.Error("Circuit Breaker tripped unreasonably ", scb.ErrorRate(), scb.Failures()+scb.Successes())
 		}
 	}
 }
@@ -253,22 +254,27 @@ func TestStateLabels(t *testing.T) {
 }
 
 func TestZeroErrorLearning(t *testing.T) {
-	st := smartcb.NewSmartTripper(100000, smartcb.NewPolicies())
+	policies := smartcb.NewPolicies()
+	st := smartcb.NewSmartTripper(100000, policies)
 	scb := smartcb.NewSmartCircuitBreaker(st)
 
 	loop := true
-	testStop := time.After(time.Millisecond * 110)
+	testStop := time.After(time.Millisecond * 200)
 	for loop {
 		select {
 		case <-testStop:
 			loop = false
 		default:
-			if scb.Call(func() error { return protectedTask(minFail / 5.0) }, time.Second) != nil && scb.Tripped() {
+			if scb.Call(func() error { return protectedTask(minFail / 2.0) }, time.Second) != nil && scb.Tripped() {
 				t.Error("Circuit breaker tripped in Learning Phase.", scb.ErrorRate(), st.State(), st.LearnedRate())
+				return
 			}
 		}
 	}
 
+	if st.State() != smartcb.Learned {
+		t.Error("Circuit breaker is still learning")
+	}
 	if st.LearnedRate() < minFail {
 		t.Error("Circuit breaker learned abnormally low error rate", st.LearnedRate(), "Expected rate was >=", minFail)
 	}
