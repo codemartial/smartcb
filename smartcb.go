@@ -142,9 +142,12 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 		weightage := samples / float64(t.policies.SamplesPerWindow)
 		t.rate += (cbr - t.rate) * weightage / (t.policies.EWMADecayFactor + weightage)
 
-		// Enforce minimum learned error rate
+		// Enforce learned error rate limits
 		if t.rate < minFail {
 			t.rate = minFail
+		}
+		if t.rate > maxFail {
+			t.rate = maxFail
 		}
 		return false
 	}
