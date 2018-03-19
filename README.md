@@ -28,12 +28,11 @@ import (
 
 func main() {
 	taskQPS := 1000
-	taskTimeout := time.Second
 
 	st := smartcb.NewSmartTripper(taskQPS, smartcb.NewPolicies())
 	scb := smartcb.NewSmartCircuitBreaker(st)
 
-	if scb.Call(protectedTask, taskTimeout) != nil && scb.Tripped() {
+	if scb.Call(protectedTask, 0) != nil && scb.Tripped() {
 		log.Println("Circuit Breaker tripped at error rate", scb.ErrorRate(), "Normal error rate was ", st.LearnedRate())
 	}
 }

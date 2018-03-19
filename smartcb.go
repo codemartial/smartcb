@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cenk/backoff"
 	"github.com/rubyist/circuitbreaker"
 )
 
@@ -157,7 +158,7 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 		ss := float64(sampleSize)
 		ssig := float64(t.policies.SamplesPerWindow)
 		if ss > ssig {
-			ss = ssig
+			return actual > target
 		}
 		pf := (ssig - ss) / (ssig - 1)
 		fearFactor := math.Sqrt(pf*actual*(1-actual)/ss) * 2.58 // 2.58 = z-Critical at 99% confidence
@@ -208,8 +209,11 @@ func (t *SmartTripper) tripFunc() circuit.TripFunc {
 // It returns a circuit.Breaker from github.com/rubyist/circuitbreaker
 // Please see its documentation to understand how to use the breaker
 func NewSmartCircuitBreaker(t *SmartTripper) *circuit.Breaker {
+	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = t.decisionWindow / 10
 	options := &circuit.Options{
 		WindowTime: t.decisionWindow,
+		BackOff:    bo,
 	}
 	options.ShouldTrip = t.tripFunc()
 	return circuit.NewBreakerWithOptions(options)

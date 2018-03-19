@@ -293,7 +293,7 @@ func BenchmarkCB(b *testing.B) {
 	bEvents := scb.Subscribe()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			scb.Call(func() error { return protectedTask(0.0) }, time.Second)
+			scb.Call(func() error { return protectedTask(0.0) }, 0)
 			select {
 			case e := <-bEvents:
 				if e == circuit.BreakerTripped || e == circuit.BreakerFail {
