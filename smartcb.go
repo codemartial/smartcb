@@ -43,14 +43,14 @@ var defaults = Policies{
 	SamplesPerWindow:  1000,
 }
 
-// Circuit Breaker's Learning State
+// State of Circuit Breaker's Learning Module
 type State int
 
 const (
-	// Circuit Breaker has learned
+	// Learned state indicates Circuit Breaker has learned
 	Learned State = iota
 
-	// Circuit Breaker is learning
+	// Learning state indicates Circuit Breaker is learning
 	Learning
 )
 

@@ -115,6 +115,20 @@ func TestTotalFailure(t *testing.T) {
 	testRealWorld(t, true)
 }
 
+func flaky(iter int, ratelimiter chan struct{}) error {
+	time.Sleep(time.Millisecond*100 + time.Millisecond*time.Duration(rand.Float64())*100)
+	if iter < 50000 || iter > 70000 {
+		return nil
+	}
+	select {
+	case <-ratelimiter:
+		return nil
+	default:
+		time.Sleep(time.Millisecond*1000 + time.Millisecond*time.Duration(rand.Float64())*1000)
+		return fmt.Errorf("Rate Limit Exceeded")
+	}
+}
+
 func testRealWorld(t *testing.T, total bool) {
 	fmt.Println("Throttle Sim")
 	ticker := time.Tick(time.Microsecond * 2500)
@@ -124,12 +138,14 @@ func testRealWorld(t *testing.T, total bool) {
 	gcb := breaker.New(10, 2, 2*time.Second)
 
 	ratelimiter := make(chan struct{}, 3)
+	errgen := func(i int) error { return flaky(i, ratelimiter) }
+
 	go func() {
 		if total {
 			return
 		}
 		ticks := time.Tick(time.Microsecond * 6667)
-		for _ = range ticks {
+		for range ticks {
 			for i := 0; i < 3; i++ {
 				select {
 				case ratelimiter <- struct{}{}:
@@ -138,21 +154,6 @@ func testRealWorld(t *testing.T, total bool) {
 			}
 		}
 	}()
-
-	errgen := func(iter int) error {
-		time.Sleep(time.Millisecond*100 + time.Millisecond*time.Duration(rand.Float64())*100)
-		if iter < 50000 || iter > 70000 {
-			return nil
-		}
-		select {
-		case <-ratelimiter:
-			return nil
-		default:
-			time.Sleep(time.Millisecond*1000 + time.Millisecond*time.Duration(rand.Float64())*1000)
-			return fmt.Errorf("Rate Limit Exceeded")
-		}
-		return fmt.Errorf("err")
-	}
 
 	var wg sync.WaitGroup
 	var attempts_scb, attempts_rcb, attempts_gcb int64
