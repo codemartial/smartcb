@@ -171,29 +171,26 @@ func TestLowLiquidity(t *testing.T) {
 	}
 }
 
-func TestConcurrency(t *testing.T) {
-	if testing.Short() {
-		return
+func concurrentCaller(errRate float64, scb *circuit.Breaker) {
+	var wg sync.WaitGroup
+	wg.Add(32) //MAGIC
+	for i := 0; i < 32; i++ {
+		go func() {
+			_ = scb.Call(func() error { return protectedTask(errRate) }, time.Second)
+			wg.Done()
+		}()
 	}
+	wg.Wait()
+}
 
+func TestConcurrency(t *testing.T) {
 	st := smartcb.NewSmartTripper(10000, smartcb.NewPolicies())
 	scb := smartcb.NewSmartCircuitBreaker(st)
 	testStop := time.After(time.Second * 2)
 	loop := true
 	bEvents := scb.Subscribe()
 
-	concurrentCall := func(errRate float64) {
-		var wg sync.WaitGroup
-		wg.Add(32) //MAGIC
-		for i := 0; i < 32; i++ {
-			go func() {
-				_ = scb.Call(func() error { return protectedTask(errRate) }, time.Second)
-				wg.Done()
-			}()
-		}
-		wg.Wait()
-	}
-
+	concurrentCall := func(errRate float64) { concurrentCaller(errRate, scb) }
 	for loop {
 		select {
 		case <-testStop:
@@ -258,11 +255,13 @@ func TestZeroErrorLearning(t *testing.T) {
 	loop := true
 	testStop := time.After(time.Millisecond * 200)
 	for loop {
+		var err error
 		select {
 		case <-testStop:
+			err = scb.Call(func() error { return protectedTask(100) }, time.Second)
 			loop = false
 		default:
-			if scb.Call(func() error { return protectedTask(minFail / 2.0) }, time.Second) != nil && scb.Tripped() {
+			if err = scb.Call(func() error { return protectedTask(minFail / 2.0) }, time.Second); err != nil && scb.Tripped() {
 				t.Error("Circuit breaker tripped in Learning Phase.", scb.ErrorRate(), st.State(), st.LearnedRate())
 				return
 			}

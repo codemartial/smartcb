@@ -2,6 +2,9 @@
 
 [![GoDoc](https://godoc.org/github.com/codemartial/smartcb?status.svg)](https://godoc.org/github.com/codemartial/smartcb)
 [![Maintainability](https://api.codeclimate.com/v1/badges/b58cc651c02e93aba9f8/maintainability)](https://codeclimate.com/github/codemartial/smartcb/maintainability)
+[![Go Report Card](https://goreportcard.com/badge/github.com/codemartial/smartcb)](https://goreportcard.com/report/github.com/codemartial/smartcb)
+[![Build Status](https://travis-ci.org/codemartial/smartcb.svg?branch=master)](https://travis-ci.org/codemartial/smartcb)
+[![Coverage Status](https://coveralls.io/repos/github/codemartial/smartcb/badge.svg?branch=master)](https://coveralls.io/github/codemartial/smartcb?branch=master)
 
 A circuit breaker that continuously adjusts itself according to the error rate profile of the protected task and configures the right tripping threshold as needed.
 
