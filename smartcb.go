@@ -135,6 +135,25 @@ func (t *SmartTripper) initLearning(cb *circuit.Breaker) {
 	t.state = Learning
 }
 
+func (t *SmartTripper) decideLearning(cb *circuit.Breaker) {
+	learningCycles := t.policies.LearningWindowX
+	relearningCycles := t.policies.ReLearningWindowX
+	tElapsed := time.Since(t.initTime)
+
+	// Initiate Learning Phase
+	if t.initTime == (time.Time{}) || tElapsed > t.decisionWindow*time.Duration(relearningCycles) {
+		t.initLearning(cb)
+		tElapsed = time.Since(t.initTime)
+	}
+
+	cycles := float64(tElapsed) / float64(t.decisionWindow)
+
+	// Terminate Learning Phase
+	if t.state == Learning && cycles > learningCycles {
+		t.state = Learned
+	}
+}
+
 func (t *SmartTripper) recordError(cbr, samples float64) bool {
 	if t.state != Learning {
 		return false
@@ -169,25 +188,11 @@ func (t *SmartTripper) shouldPerhapsTrip(target, actual float64, sampleSize int6
 
 func (t *SmartTripper) tripper(cb *circuit.Breaker) bool {
 	maxFail := t.policies.MaxFail
-	learningCycles := t.policies.LearningWindowX
-	relearningCycles := t.policies.ReLearningWindowX
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	tElapsed := time.Since(t.initTime)
 
-	// Initiate Learning Phase
-	if t.initTime == (time.Time{}) || tElapsed > t.decisionWindow*time.Duration(relearningCycles) {
-		t.initLearning(cb)
-		tElapsed = time.Since(t.initTime)
-	}
-
-	cycles := float64(tElapsed) / float64(t.decisionWindow)
-
-	// Terminate Learning Phase
-	if t.state == Learning && cycles > learningCycles {
-		t.state = Learned
-	}
+	t.decideLearning(cb)
 
 	samples := cb.Failures() + cb.Successes()
 	errorRate := cb.ErrorRate()
