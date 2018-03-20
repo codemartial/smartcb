@@ -146,18 +146,15 @@ func TestLearnGuard(t *testing.T) {
 	scb := smartcb.NewSmartCircuitBreaker(st)
 	loop := true
 	testStop := time.After(time.Millisecond * 110)
-	var tripped bool
 	for loop {
 		select {
 		case <-testStop:
 			loop = false
 		default:
-			if scb.Call(func() error { return protectedTask(smartcb.NewPolicies().MaxFail * 1.1) }, time.Second) != nil {
-				tripped = scb.Tripped()
-			}
+			scb.Call(func() error { return protectedTask(smartcb.NewPolicies().MaxFail * 1.1) }, 0)
 		}
 	}
-	if !tripped {
+	if st.LearnedRate() > smartcb.NewPolicies().MaxFail {
 		t.Error("Circuit Breaker learned a dangerous failure rate ", st.LearnedRate())
 	}
 }
