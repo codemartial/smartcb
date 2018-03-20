@@ -1,6 +1,7 @@
 # Self-Configuring Smart Circuit Breaker
 
 [![GoDoc](https://godoc.org/github.com/codemartial/smartcb?status.svg)](https://godoc.org/github.com/codemartial/smartcb)
+[![Maintainability](https://api.codeclimate.com/v1/badges/b58cc651c02e93aba9f8/maintainability)](https://codeclimate.com/github/codemartial/smartcb/maintainability)
 
 A circuit breaker that continuously adjusts itself according to the error rate profile of the protected task and configures the right tripping threshold as needed.
 

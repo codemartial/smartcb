@@ -67,9 +67,10 @@ func (s State) String() string {
 	}
 }
 
-// A Smart TripFunction Generator
+// SmartTripper controls behaviour of the tripping function used
+// by the circuit breaker
 //
-// All circuit breakers obtained out of a generator
+// All circuit breakers obtained out of a SmartTripper instance
 // share their learning state, but the circuit breaker state
 // (error rates, event counts, etc.) is not shared
 //
@@ -82,18 +83,18 @@ type SmartTripper struct {
 	mu             sync.Mutex
 }
 
-// Returns Policies initialised to default values
+// NewPolicies returns Policies initialised to default values
 //
 func NewPolicies() Policies {
 	return defaults
 }
 
-// Create a SmartTripper based on the nominal QPS for your task
+// NewSmartTripper creates a SmartTripper based on the nominal QPS for your task
 //
 // "Nominal QPS" is the basis on which the SmartTripper configures its
 // responsiveness settings. A suitable value for this parameter would be
 // your median QPS. If your QPS varies a lot during operation, choosing this
-// value closer to max QPS will make the circuit breaker more prone to tripping
+// value closer to max QPS will make the circuit breaker reluctant to trip
 // during low traffic periods and choosing a value closer to min QPS will make it
 // slow to respond during high traffic periods.
 //
@@ -109,7 +110,7 @@ func NewSmartTripper(QPS int, p Policies) *SmartTripper {
 	return &SmartTripper{decisionWindow: decisionWindow, policies: p, rate: minFail}
 }
 
-// Returns the Learning/Learned state of the Smart Tripper
+// State returns the Learning/Learned status of the Smart Tripper
 //
 // State change only happens when an error is triggered
 // Therefore timing alone can not be relied upon to detect state changes
@@ -120,7 +121,7 @@ func (t *SmartTripper) State() State {
 	return t.state
 }
 
-// Returns the error rate that has been learned by the Smart Tripper
+// LearnedRate returns the tripping error rate learned by the SmartTripper
 //
 func (t *SmartTripper) LearnedRate() float64 {
 	t.mu.Lock()
@@ -129,82 +130,77 @@ func (t *SmartTripper) LearnedRate() float64 {
 	return t.rate
 }
 
-func (t *SmartTripper) tripFunc() circuit.TripFunc {
-	learningCycles := t.policies.LearningWindowX
-	relearningCycles := t.policies.ReLearningWindowX
-	maxFail := t.policies.MaxFail
+func (t *SmartTripper) initLearning(cb *circuit.Breaker) {
+	t.initTime = time.Now()
+	t.state = Learning
+}
 
-	initLearning := func(cb *circuit.Breaker) {
-		t.initTime = time.Now()
-		t.state = Learning
-	}
-
-	recordError := func(cbr, samples float64) bool {
-		weightage := samples / float64(t.policies.SamplesPerWindow)
-		t.rate += (cbr - t.rate) * weightage / (t.policies.EWMADecayFactor + weightage)
-
-		// Enforce learned error rate limits
-		if t.rate < minFail {
-			t.rate = minFail
-		}
-		if t.rate > maxFail {
-			t.rate = maxFail
-		}
+func (t *SmartTripper) recordError(cbr, samples float64) bool {
+	if t.state != Learning {
 		return false
 	}
 
-	// Use Adjusted Wald Method to estimate whether we are confident enough to trip based on the no. of samples
-	shouldPerhapsTrip := func(target, actual float64, sampleSize int64) bool {
-		ss := float64(sampleSize)
-		ssig := float64(t.policies.SamplesPerWindow)
-		if ss > ssig {
-			return actual > target
-		}
-		pf := (ssig - ss) / (ssig - 1)
-		fearFactor := math.Sqrt(pf*actual*(1-actual)/ss) * 2.58 // 2.58 = z-Critical at 99% confidence
+	maxFail := t.policies.MaxFail
+	weightage := samples / float64(t.policies.SamplesPerWindow)
+	t.rate += (cbr - t.rate) * weightage / (t.policies.EWMADecayFactor + weightage)
 
-		return actual-fearFactor > target
+	// Enforce learned error rate limits
+	if t.rate < minFail {
+		t.rate = minFail
 	}
-
-	tripper := func(cb *circuit.Breaker) bool {
-		t.mu.Lock()
-		defer t.mu.Unlock()
-		tElapsed := time.Since(t.initTime)
-
-		// Initiate Learning Phase
-		if t.initTime == (time.Time{}) || tElapsed > t.decisionWindow*time.Duration(relearningCycles) {
-			initLearning(cb)
-			tElapsed = time.Since(t.initTime)
-		}
-
-		cycles := float64(tElapsed) / float64(t.decisionWindow)
-
-		// Terminate Learning Phase
-		if t.state == Learning && cycles > learningCycles {
-			t.state = Learned
-		}
-
-		samples := cb.Failures() + cb.Successes()
-		errorRate := cb.ErrorRate()
-		if samples < t.policies.SamplesPerWindow/10 { // Not enough data to decide
-			return false
-		}
-
-		if t.state == Learning {
-			tripRate := math.Sqrt(maxFail/t.rate) * t.rate
-			// Either trip or learn the error rate
-			return shouldPerhapsTrip(tripRate, errorRate, samples) || recordError(errorRate, float64(samples))
-		}
-
-		return shouldPerhapsTrip(math.Sqrt(maxFail/t.rate)*t.rate,
-			errorRate,
-			samples)
+	if t.rate > maxFail {
+		t.rate = maxFail
 	}
-
-	return tripper
+	return false
 }
 
-// Create a new circuit.Breaker using the dynamically self-configuring SmartTripper
+// Use Adjusted Wald Method to estimate whether we are confident enough to trip based on the no. of samples
+func (t *SmartTripper) shouldPerhapsTrip(target, actual float64, sampleSize int64) bool {
+	ss := float64(sampleSize)
+	ssig := float64(t.policies.SamplesPerWindow)
+	if ss > ssig {
+		return actual > target
+	}
+	pf := (ssig - ss) / (ssig - 1)
+	fearFactor := math.Sqrt(pf*actual*(1-actual)/ss) * 2.58 // 2.58 = z-Critical at 99% confidence
+
+	return actual-fearFactor > target
+}
+
+func (t *SmartTripper) tripper(cb *circuit.Breaker) bool {
+	maxFail := t.policies.MaxFail
+	learningCycles := t.policies.LearningWindowX
+	relearningCycles := t.policies.ReLearningWindowX
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	tElapsed := time.Since(t.initTime)
+
+	// Initiate Learning Phase
+	if t.initTime == (time.Time{}) || tElapsed > t.decisionWindow*time.Duration(relearningCycles) {
+		t.initLearning(cb)
+		tElapsed = time.Since(t.initTime)
+	}
+
+	cycles := float64(tElapsed) / float64(t.decisionWindow)
+
+	// Terminate Learning Phase
+	if t.state == Learning && cycles > learningCycles {
+		t.state = Learned
+	}
+
+	samples := cb.Failures() + cb.Successes()
+	errorRate := cb.ErrorRate()
+	if samples < t.policies.SamplesPerWindow/10 { // Not enough data to decide
+		return false
+	}
+
+	tripRate := math.Sqrt(maxFail/t.rate) * t.rate
+	// Either trip or learn the error rate
+	return t.shouldPerhapsTrip(tripRate, errorRate, samples) || t.recordError(errorRate, float64(samples))
+}
+
+// NewSmartCircuitBreaker creates a new circuit.Breaker based on the SmartTripper
 //
 // It returns a circuit.Breaker from github.com/rubyist/circuitbreaker
 // Please see its documentation to understand how to use the breaker
@@ -215,6 +211,6 @@ func NewSmartCircuitBreaker(t *SmartTripper) *circuit.Breaker {
 		WindowTime: t.decisionWindow,
 		BackOff:    bo,
 	}
-	options.ShouldTrip = t.tripFunc()
+	options.ShouldTrip = t.tripper
 	return circuit.NewBreakerWithOptions(options)
 }
